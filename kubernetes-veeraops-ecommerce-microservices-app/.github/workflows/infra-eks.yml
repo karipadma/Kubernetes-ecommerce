@@ -1,7 +1,7 @@
 name: infra Terraform
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:main
 
 env:
   AWS_REGION: us-east-1
