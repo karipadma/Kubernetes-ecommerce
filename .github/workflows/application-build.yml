@@ -1,39 +1,98 @@
 name: CI/CD for app
 
-
 on:
   workflow_dispatch:
 
+  # Uncomment this when you want automatic deployment on push
   # push:
   #   branches:
   #     - main
 
 env:
   AWS_REGION: us-east-1
+
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
-  
+
   FRONTEND_SERVICES: "main appliances auto beauty books computers earphones electronics fashion food furniture googlegrocery googlemusic googlepay home mobiles sports toys two-wheelers"
+
   BACKEND_SERVICE: "backend"
 
 permissions:
   contents: write
 
 jobs:
+
   deploy:
+    name: Build and Push Docker Images
     runs-on: ubuntu-latest
 
     steps:
-      # -------------------------
-      # Checkout
-      # -------------------------
+
+      # ============================================================
+      # CHECKOUT REPOSITORY
+      # ============================================================
+
       - name: 🧾 Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GIT_PAT }}
+          fetch-depth: 0
 
-      # -------------------------
-      # AWS Credentials
-      # -------------------------
+
+      # ============================================================
+      # CHECK REPOSITORY STRUCTURE
+      # ============================================================
+
+      - name: 🔍 Verify repository structure
+        run: |
+          echo "=========================================="
+          echo "Current directory"
+          echo "=========================================="
+
+          pwd
+
+          echo ""
+          echo "=========================================="
+          echo "Repository files"
+          echo "=========================================="
+
+          ls -la
+
+          echo ""
+          echo "=========================================="
+          echo "Application directory"
+          echo "=========================================="
+
+          ls -la kubernetes-veeraops-ecommerce-microservices-app
+
+          echo ""
+          echo "=========================================="
+          echo "Frontend directory"
+          echo "=========================================="
+
+          ls -la kubernetes-veeraops-ecommerce-microservices-app/frontend
+
+          echo ""
+          echo "=========================================="
+          echo "Dockerfiles found"
+          echo "=========================================="
+
+          find kubernetes-veeraops-ecommerce-microservices-app/frontend \
+            -name Dockerfile \
+            -print
+
+          echo ""
+          echo "=========================================="
+          echo "Backend directory"
+          echo "=========================================="
+
+          ls -la kubernetes-veeraops-ecommerce-microservices-app/backend
+
+
+      # ============================================================
+      # CONFIGURE AWS
+      # ============================================================
+
       - name: 🔧 Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -41,85 +100,432 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # -------------------------
-      # ECR Login
-      # -------------------------
+
+      # ============================================================
+      # LOGIN TO AMAZON ECR
+      # ============================================================
+
       - name: 📦 Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      # -------------------------
-      # Build & Push Images
-      # -------------------------
+
+      # ============================================================
+      # BUILD AND PUSH DOCKER IMAGES
+      # ============================================================
+
       - name: 🛠 Build and Push Docker Images
+        shell: bash
         run: |
+
           set -e
+
           IMAGE_TAG="${GITHUB_SHA}"
 
-          # -------- Frontend --------
-          for service in $FRONTEND_SERVICES; do
+          echo ""
+          echo "=========================================="
+          echo "CI/CD BUILD STARTED"
+          echo "=========================================="
+
+          echo "AWS Region : $AWS_REGION"
+          echo "Image Tag  : $IMAGE_TAG"
+          echo "ECR        : $ECR_REGISTRY"
+
+          echo ""
+
+
+          # ========================================================
+          # FRONTEND SERVICES
+          # ========================================================
+
+          echo "=========================================="
+          echo "FRONTEND SERVICES"
+          echo "=========================================="
+
+          for service in $FRONTEND_SERVICES
+          do
+
             FOLDER="kubernetes-veeraops-ecommerce-microservices-app/frontend/$service"
+
             REPO_NAME="shopping-site-$service"
+
             IMAGE_URI="$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG"
 
-            if [ ! -f "$FOLDER/Dockerfile" ]; then
-              echo "⚠️ No Dockerfile in $FOLDER, skipping..."
+
+            echo ""
+            echo "------------------------------------------"
+            echo "Service : $service"
+            echo "Folder  : $FOLDER"
+            echo "ECR     : $REPO_NAME"
+            echo "Image   : $IMAGE_URI"
+            echo "------------------------------------------"
+
+
+            # ------------------------------------------------------
+            # Check directory
+            # ------------------------------------------------------
+
+            if [ ! -d "$FOLDER" ]; then
+
+              echo "⚠️ Directory does not exist:"
+              echo "$FOLDER"
+
               continue
+
             fi
 
-            echo "🚀 Building $service"
 
-            aws ecr describe-repositories --repository-names $REPO_NAME >/dev/null 2>&1 || \
+            # ------------------------------------------------------
+            # Check Dockerfile
+            # ------------------------------------------------------
+
+            if [ ! -f "$FOLDER/Dockerfile" ]; then
+
+              echo "⚠️ No Dockerfile in $FOLDER"
+              echo "⚠️ Skipping $service"
+
+              continue
+
+            fi
+
+
+            echo "✅ Dockerfile found"
+
+
+            # ------------------------------------------------------
+            # Create ECR repository if required
+            # ------------------------------------------------------
+
+            echo "🔎 Checking ECR repository..."
+
+            if aws ecr describe-repositories \
+              --repository-names "$REPO_NAME" \
+              --region "$AWS_REGION" \
+              >/dev/null 2>&1
+            then
+
+              echo "✅ ECR repository already exists"
+
+            else
+
+              echo "📦 Creating ECR repository..."
+
               aws ecr create-repository \
-                --repository-name $REPO_NAME \
+                --repository-name "$REPO_NAME" \
+                --region "$AWS_REGION" \
                 --image-scanning-configuration scanOnPush=true
 
-            docker build -t $IMAGE_URI $FOLDER
-            docker push $IMAGE_URI
+              echo "✅ ECR repository created"
 
-            sed -i "s|image:.*|image: $IMAGE_URI|g" "$FOLDER/deployment.yml"
+            fi
+
+
+            # ------------------------------------------------------
+            # Docker build
+            # ------------------------------------------------------
+
+            echo "🐳 Building Docker image..."
+
+            docker build \
+              -t "$IMAGE_URI" \
+              "$FOLDER"
+
+
+            # ------------------------------------------------------
+            # Docker push
+            # ------------------------------------------------------
+
+            echo "📤 Pushing Docker image..."
+
+            docker push "$IMAGE_URI"
+
+
+            # ------------------------------------------------------
+            # Update Kubernetes deployment
+            # ------------------------------------------------------
+
+            if [ -f "$FOLDER/deployment.yml" ]; then
+
+              echo "📝 Updating deployment.yml..."
+
+              sed -i \
+                "s|image:.*|image: $IMAGE_URI|g" \
+                "$FOLDER/deployment.yml"
+
+              echo "✅ deployment.yml updated"
+
+            else
+
+              echo "⚠️ deployment.yml not found in $FOLDER"
+
+            fi
+
+
+            echo "✅ Completed frontend service: $service"
+
           done
 
-          # -------- Backend --------
+
+          # ========================================================
+          # BACKEND
+          # ========================================================
+
+          echo ""
+          echo "=========================================="
+          echo "BACKEND"
+          echo "=========================================="
+
+
           FOLDER="kubernetes-veeraops-ecommerce-microservices-app/backend"
+
           REPO_NAME="shopping-site-backend"
+
           IMAGE_URI="$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG"
 
-          echo "🚀 Building backend"
 
-          aws ecr describe-repositories --repository-names $REPO_NAME >/dev/null 2>&1 || \
+          echo ""
+          echo "Backend folder : $FOLDER"
+          echo "ECR repository : $REPO_NAME"
+          echo "Image          : $IMAGE_URI"
+          echo ""
+
+
+          # --------------------------------------------------------
+          # Check backend directory
+          # --------------------------------------------------------
+
+          if [ ! -d "$FOLDER" ]; then
+
+            echo "❌ Backend directory does not exist:"
+            echo "$FOLDER"
+
+            exit 1
+
+          fi
+
+
+          # --------------------------------------------------------
+          # Check backend Dockerfile
+          # --------------------------------------------------------
+
+          if [ ! -f "$FOLDER/Dockerfile" ]; then
+
+            echo "❌ Backend Dockerfile not found:"
+            echo "$FOLDER/Dockerfile"
+
+            exit 1
+
+          fi
+
+
+          echo "✅ Backend Dockerfile found"
+
+
+          # --------------------------------------------------------
+          # Create backend ECR repository
+          # --------------------------------------------------------
+
+          echo "🔎 Checking backend ECR repository..."
+
+
+          if aws ecr describe-repositories \
+            --repository-names "$REPO_NAME" \
+            --region "$AWS_REGION" \
+            >/dev/null 2>&1
+          then
+
+            echo "✅ Backend ECR repository already exists"
+
+          else
+
+            echo "📦 Creating backend ECR repository..."
+
             aws ecr create-repository \
-              --repository-name $REPO_NAME \
+              --repository-name "$REPO_NAME" \
+              --region "$AWS_REGION" \
               --image-scanning-configuration scanOnPush=true
 
-          docker build -t $IMAGE_URI $FOLDER
-          docker push $IMAGE_URI
+            echo "✅ Backend ECR repository created"
 
-          sed -i "s|image:.*|image: $IMAGE_URI|g" "$FOLDER/backend-deployment.yml"
+          fi
 
-      # -------------------------
-# Commit YAML changes
-            # -------------------------
-      # Commit YAML changes
-      # -------------------------
-      - name: 🔄 Commit updated YAML files
+
+          # --------------------------------------------------------
+          # Build backend
+          # --------------------------------------------------------
+
+          echo "🐳 Building backend Docker image..."
+
+          docker build \
+            -t "$IMAGE_URI" \
+            "$FOLDER"
+
+
+          # --------------------------------------------------------
+          # Push backend
+          # --------------------------------------------------------
+
+          echo "📤 Pushing backend Docker image..."
+
+          docker push "$IMAGE_URI"
+
+
+          # --------------------------------------------------------
+          # Update backend deployment
+          # --------------------------------------------------------
+
+          if [ -f "$FOLDER/backend-deployment.yml" ]; then
+
+            echo "📝 Updating backend-deployment.yml..."
+
+            sed -i \
+              "s|image:.*|image: $IMAGE_URI|g" \
+              "$FOLDER/backend-deployment.yml"
+
+            echo "✅ backend-deployment.yml updated"
+
+          else
+
+            echo "⚠️ backend-deployment.yml not found"
+
+          fi
+
+
+          echo ""
+          echo "=========================================="
+          echo "✅ ALL DOCKER IMAGES BUILT AND PUSHED"
+          echo "=========================================="
+
+
+      # ============================================================
+      # SHOW CHANGES
+      # ============================================================
+
+      - name: 🔍 Show modified deployment files
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
 
-          git add "$PROJECT_DIR/frontend"
-          git add "$PROJECT_DIR/backend/backend-deployment.yml"
+          echo "=========================================="
+          echo "GIT STATUS"
+          echo "=========================================="
 
           git status
 
-          git commit \
-            -m "🔄 Update image tags after build [skip ci]" \
-            || echo "No changes to commit"
+          echo ""
+          echo "=========================================="
+          echo "MODIFIED FILES"
+          echo "=========================================="
 
-          git push origin main || echo "Nothing to push"
-      
-      # -------------------------
-      # Prevent CI loop
-      # -------------------------
-      - name: 🧠 Skip loop if commit was automated
-        if: contains(github.event.head_commit.message, '[skip ci]')
-        run: echo "Skipping re-triggered build"
+          git diff --name-only
+
+          echo ""
+          echo "=========================================="
+          echo "DEPLOYMENT IMAGE CHANGES"
+          echo "=========================================="
+
+          git diff -- \
+            kubernetes-veeraops-ecommerce-microservices-app/frontend \
+            kubernetes-veeraops-ecommerce-microservices-app/backend
+
+
+      # ============================================================
+      # COMMIT UPDATED KUBERNETES YAML
+      # ============================================================
+
+      - name: 🔄 Commit updated YAML files
+        shell: bash
+        run: |
+
+          set -e
+
+          git config --global user.name "GitHub Actions"
+
+          git config --global user.email "actions@github.com"
+
+
+          echo "=========================================="
+          echo "STAGING CHANGES"
+          echo "=========================================="
+
+
+          # Add frontend deployment files
+          git add \
+            kubernetes-veeraops-ecommerce-microservices-app/frontend/
+
+
+          # Add backend deployment
+          git add \
+            kubernetes-veeraops-ecommerce-microservices-app/backend/backend-deployment.yml
+
+
+          echo ""
+          echo "=========================================="
+          echo "STAGED FILES"
+          echo "=========================================="
+
+
+          git status
+
+
+          # --------------------------------------------------------
+          # Check whether anything is staged
+          # --------------------------------------------------------
+
+          if git diff --cached --quiet
+          then
+
+            echo ""
+            echo "ℹ️ No changes to commit"
+            exit 0
+
+          fi
+
+
+          # --------------------------------------------------------
+          # Commit
+          # --------------------------------------------------------
+
+          echo ""
+          echo "📦 Creating Git commit..."
+
+
+          git commit \
+            -m "🔄 Update image tags after build [skip ci]"
+
+
+          # --------------------------------------------------------
+          # Push
+          # --------------------------------------------------------
+
+          echo ""
+          echo "📤 Pushing changes to main..."
+
+
+          git push origin HEAD:main
+
+
+          echo ""
+          echo "✅ Deployment YAML changes pushed successfully"
+
+
+      # ============================================================
+      # COMPLETION
+      # ============================================================
+
+      - name: ✅ Deployment completed
+        run: |
+
+          echo ""
+          echo "=========================================="
+          echo "🎉 CI/CD COMPLETED SUCCESSFULLY"
+          echo "=========================================="
+
+          echo ""
+          echo "Docker images were built and pushed to ECR."
+
+          echo ""
+          echo "Kubernetes deployment YAML files were updated."
+
+          echo ""
+          echo "Argo CD can now synchronize the updated images."
+
+          echo ""
+          echo "=========================================="
