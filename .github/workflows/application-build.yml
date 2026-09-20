@@ -57,7 +57,7 @@ jobs:
 
           # -------- Frontend --------
           for service in $FRONTEND_SERVICES; do
-            FOLDER="frontend/$service"
+            FOLDER="kubernetes-veeraops-ecommerce-microservices-app/frontend/$service"
             REPO_NAME="shopping-site-$service"
             IMAGE_URI="$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG"
 
@@ -80,7 +80,7 @@ jobs:
           done
 
           # -------- Backend --------
-          FOLDER="backend"
+          FOLDER="kubernetes-veeraops-ecommerce-microservices-app/backend"
           REPO_NAME="shopping-site-backend"
           IMAGE_URI="$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG"
 
